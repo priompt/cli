@@ -37,9 +37,9 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
-	pb "priomptproto/gen/priompt/v1"
-	"priomptproto/semdiff"
-	"priomptproto/validate"
+	pb "github.com/priompt/proto/gen/priompt/v1"
+	"github.com/priompt/proto/semdiff"
+	"github.com/priompt/proto/validate"
 )
 
 func main() {

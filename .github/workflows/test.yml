@@ -9,18 +9,8 @@ jobs:
   go:
     runs-on: ubuntu-latest
     steps:
-      # go.mod points at the sibling proto module (gRPC stubs, semdiff,
-      # validate) with a replace directive until it is published, so both
-      # repos are checked out side by side — same layout as a local clone.
       - uses: actions/checkout@v4
-        with:
-          path: cli
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/proto
-          path: proto
       - uses: actions/setup-go@v5
         with:
-          go-version-file: cli/go.mod
+          go-version-file: go.mod
       - run: go test ./...
-        working-directory: cli

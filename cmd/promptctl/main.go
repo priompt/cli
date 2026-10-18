@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -187,7 +188,7 @@ func pushCmd(args []string) {
 	fs := flag.NewFlagSet("push", flag.ExitOnError)
 	server := fs.String("server", "", "after pushing, publish prompts to this live server (host:port)")
 	useTLS := fs.Bool("tls", false, "use TLS for -server")
-	caCert := fs.String("ca-cert", "", "CA cert for TLS -server (optional)")
+	caCert := fs.String("ca-cert", "", "CA cert for TLS -server (default: system roots)")
 	fs.Parse(args)
 
 	validateAll()
@@ -204,7 +205,7 @@ func publishCmd(args []string) {
 	fs := flag.NewFlagSet("publish", flag.ExitOnError)
 	server := fs.String("server", "", "live server address (host:port)")
 	useTLS := fs.Bool("tls", false, "use TLS")
-	caCert := fs.String("ca-cert", "", "CA cert for TLS (optional)")
+	caCert := fs.String("ca-cert", "", "CA cert for TLS (default: system roots)")
 	fs.Parse(args)
 	if *server == "" {
 		log.Fatal("publish needs -server host:port")
@@ -237,18 +238,28 @@ func publishToServer(server string, useTLS bool, caCert string, paths []string) 
 }
 
 func dial(addr string, useTLS bool, caCert string) *grpc.ClientConn {
-	creds := insecure.NewCredentials()
-	if useTLS {
-		var err error
-		if creds, err = credentials.NewClientTLSFromFile(caCert, ""); err != nil {
-			log.Fatal(err)
-		}
+	creds, err := transportCreds(useTLS, caCert)
+	if err != nil {
+		log.Fatal(err)
 	}
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(creds))
 	if err != nil {
 		log.Fatal(err)
 	}
 	return conn
+}
+
+// transportCreds picks the gRPC transport: plaintext, TLS verified against the
+// system root CAs, or TLS verified against the -ca-cert file.
+func transportCreds(useTLS bool, caCert string) (credentials.TransportCredentials, error) {
+	switch {
+	case !useTLS:
+		return insecure.NewCredentials(), nil
+	case caCert == "":
+		return credentials.NewTLS(&tls.Config{}), nil // nil RootCAs = system pool
+	default:
+		return credentials.NewClientTLSFromFile(caCert, "")
+	}
 }
 
 func authCtx() context.Context {

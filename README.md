@@ -114,7 +114,9 @@ flowchart LR
   subscribed agents are notified in the same step. Publishing is idempotent
   (unchanged content is a no-op), so only real changes fire a notification.
   Git stays the source of truth; the server is the live serving copy.
-- `push` / `publish` accept `-tls` and `-ca-cert` for TLS servers.
+- `push` / `publish` accept `-tls` for TLS servers. The server certificate is
+  verified against the system root CAs, or against `-ca-cert <file>` for a
+  private CA.
 
 ## Configuration
 

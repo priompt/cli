@@ -119,6 +119,11 @@ flowchart LR
   subscribed agents are notified in the same step. Publishing is idempotent
   (unchanged content is a no-op), so only real changes fire a notification.
   Git stays the source of truth; the server is the live serving copy.
+- `push` / `publish` send what is **committed** at HEAD and refuse prompts with
+  uncommitted changes. They publish to the server's `main` (what agents read)
+  only from git `main`, `master` or `prod`; from any other branch pass
+  `-branch <server-branch>`. Each version records the HEAD commit subject as its
+  message. `push` pushes only the current branch.
 - `push` / `publish` accept `-tls` for TLS servers. The server certificate is
   verified against the system root CAs, or against `-ca-cert <file>` for a
   private CA.

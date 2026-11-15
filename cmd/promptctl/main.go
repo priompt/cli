@@ -321,21 +321,36 @@ func commitFile(r *git.Repository, wt *git.Worktree, path, content, msg string) 
 	return wt.Commit(msg, &git.CommitOptions{Author: author(r)})
 }
 
-// pushCmd validates, pushes to the git remote, and — if -server is given —
-// publishes every prompt to that live server so subscribers are notified.
-// Publishing is idempotent server-side, so only actually-changed prompts notify.
+// pushCmd validates, pushes the current branch to the git remote, and — if
+// -server is given — publishes every prompt committed at HEAD to that live
+// server so subscribers are notified. Publishing is idempotent server-side, so
+// only actually-changed prompts notify.
 func pushCmd(args []string) {
 	fs := flag.NewFlagSet("push", flag.ExitOnError)
 	server := fs.String("server", "", "after pushing, publish prompts to this live server (host:port)")
 	useTLS := fs.Bool("tls", false, "use TLS for -server")
 	caCert := fs.String("ca-cert", "", "CA cert for TLS -server (default: system roots)")
+	branch := fs.String("branch", "", "server branch to publish to (default: main, only from git main/master/prod)")
 	fs.Parse(args)
 
 	validateAll()
 	r := openRepo()
-	reportSync("pushed", r.Push(&git.PushOptions{Auth: authFor(r), Progress: os.Stdout}))
+	head, err := r.Head()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if !head.Name().IsBranch() {
+		log.Fatal("push needs a checked-out branch (HEAD is detached)")
+	}
+	var plan []publication
 	if *server != "" {
-		publishToServer(*server, *useTLS, *caCert, diskPromptFiles())
+		// Decide what would be published before anything leaves the machine.
+		plan = committedPublications(r, diskPromptFiles(), *branch)
+	}
+	spec := config.RefSpec(head.Name().String() + ":" + head.Name().String())
+	reportSync("pushed", r.Push(&git.PushOptions{Auth: authFor(r), Progress: os.Stdout, RefSpecs: []config.RefSpec{spec}}))
+	if *server != "" {
+		publishToServer(*server, *useTLS, *caCert, plan)
 	}
 }
 
@@ -346,6 +361,7 @@ func publishCmd(args []string) {
 	server := fs.String("server", "", "live server address (host:port)")
 	useTLS := fs.Bool("tls", false, "use TLS")
 	caCert := fs.String("ca-cert", "", "CA cert for TLS (default: system roots)")
+	branch := fs.String("branch", "", "server branch to publish to (default: main, only from git main/master/prod)")
 	fs.Parse(args)
 	if *server == "" {
 		log.Fatal("publish needs -server host:port")
@@ -362,26 +378,103 @@ func publishCmd(args []string) {
 			}
 		}
 	}
-	publishToServer(*server, *useTLS, *caCert, paths)
+	var plan []publication
+	if r, err := git.PlainOpen("."); err == nil {
+		plan = committedPublications(r, paths, *branch)
+	} else {
+		// Not a git repo: plain files, published as they are on disk.
+		for _, p := range paths {
+			plan = append(plan, publication{path: p, template: diskContent(p), branch: *branch})
+		}
+	}
+	publishToServer(*server, *useTLS, *caCert, plan)
 }
 
-// publishToServer validates and PublishPrompts each prompt file to the server.
-func publishToServer(server string, useTLS bool, caCert string, paths []string) {
+// publication is one prompt version headed for the server.
+type publication struct {
+	path, template, message, branch string
+}
+
+// servingBranches may publish to the server's main, the branch agents read.
+// dev -> staging -> prod are git branches and prod is what gets published.
+var servingBranches = []string{"main", "master", "prod"}
+
+// committedPublications reads each prompt from the HEAD commit, so git stays the
+// source of truth: uncommitted edits are refused rather than silently going
+// live. Without -branch, only a serving git branch may publish to server main;
+// anything else (dev, a feature branch) has to name the server branch it means.
+func committedPublications(r *git.Repository, paths []string, serverBranch string) []publication {
+	head, err := r.Head()
+	if err != nil {
+		log.Fatalf("nothing committed to publish: %v", err)
+	}
+	if serverBranch == "" && !(head.Name().IsBranch() && slices.Contains(servingBranches, head.Name().Short())) {
+		log.Fatalf("on %s: refusing to publish to the server's main (what agents read) from a non-serving branch; "+
+			"switch to %s, or pass -branch <server-branch>", head.Name().Short(), strings.Join(servingBranches, "/"))
+	}
+	c, err := r.CommitObject(head.Hash())
+	if err != nil {
+		log.Fatal(err)
+	}
+	tree, err := c.Tree()
+	if err != nil {
+		log.Fatal(err)
+	}
+	st, err := worktree(r).Status()
+	if err != nil {
+		log.Fatal(err)
+	}
+	msg := fmt.Sprintf("%s (%s)", firstLine(c.Message), c.Hash.String()[:12])
+	var plan []publication
+	for _, p := range paths {
+		if uncommitted(st, tree, p) {
+			log.Fatalf("%s has uncommitted changes; commit them first (publish sends what is committed)", p)
+		}
+		t := blobContent(tree, p)
+		if t == "" {
+			log.Fatalf("%s is not in the HEAD commit", p)
+		}
+		plan = append(plan, publication{path: p, template: t, message: msg, branch: serverBranch})
+	}
+	return plan
+}
+
+// uncommitted reports whether p differs from the commit whose tree is given.
+// Clean files are absent from the status map (st.File would invent an
+// "untracked" entry for them). go-git ignores core.autocrlf whenever it has to
+// hash a file (a racy index entry, a touched file), so a CRLF checkout of an LF
+// blob shows as modified on Windows; such a file only counts when it differs by
+// more than line endings.
+func uncommitted(st git.Status, tree *object.Tree, p string) bool {
+	fs, ok := st[p]
+	if !ok {
+		return false
+	}
+	if fs.Staging == git.Unmodified && fs.Worktree == git.Modified {
+		_, _, changed := changedLines(blobContent(tree, p), diskContent(p))
+		return changed
+	}
+	return fs.Staging != git.Unmodified || fs.Worktree != git.Unmodified
+}
+
+// publishToServer validates and PublishPrompts each prompt to the server.
+func publishToServer(server string, useTLS bool, caCert string, plan []publication) {
 	conn := dial(server, useTLS, caCert)
 	defer conn.Close()
 	client := pb.NewPromptServiceClient(conn)
 	ctx := authCtx()
-	for _, p := range paths {
-		t := diskContent(p)
-		slots := deriveSlots(t)
-		if err := validate.Prompt(pathToURI(p), t, slots); err != nil {
-			log.Fatalf("invalid %s: %v", p, err)
+	for _, p := range plan {
+		slots := deriveSlots(p.template)
+		if err := validate.Prompt(pathToURI(p.path), p.template, slots); err != nil {
+			log.Fatalf("invalid %s: %v", p.path, err)
 		}
-		resp, err := client.PublishPrompt(ctx, &pb.PublishPromptRequest{Uri: pathToURI(p), Template: t, Slots: slots})
+		resp, err := client.PublishPrompt(ctx, &pb.PublishPromptRequest{
+			Uri: pathToURI(p.path), Template: p.template, Slots: slots, Message: p.message, Branch: p.branch,
+		})
 		if err != nil {
-			log.Fatalf("publish %s: %v", p, err)
+			log.Fatalf("publish %s: %v", p.path, err)
 		}
-		fmt.Printf("published %s (%s)\n", pathToURI(p), resp.GetVersionHash()[:12])
+		fmt.Printf("published %s (%s)\n", pathToURI(p.path), resp.GetVersionHash()[:12])
 	}
 }
 

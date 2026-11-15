@@ -206,7 +206,9 @@ func logCmd(args []string) {
 // commits it there — the dev → staging → prod version promotion. A no-op (the
 // prompt already matches on `to`) reports "already up to date" instead of failing
 // on an empty commit. The branch (or commit) checked out before is restored after.
-// ponytail: assumes both branches exist and the tree is clean; go-git errors surface as-is.
+// It refuses to run with staged or modified tracked files: the checkout round
+// trip through `to` would silently reset them.
+// ponytail: assumes both branches exist; go-git errors surface as-is.
 func promote(args []string) {
 	if len(args) != 3 {
 		log.Fatal("usage: promptctl promote <file.prompt> <from-branch> <to-branch>")
@@ -227,11 +229,17 @@ func promote(args []string) {
 	}
 
 	wt := worktree(r)
+	if dirty := trackedChanges(wt); len(dirty) > 0 {
+		log.Fatalf("promote needs a clean working tree; commit or stash first: %s", strings.Join(dirty, ", "))
+	}
 	head, err := r.Head()
 	if err != nil {
 		log.Fatal(err)
 	}
 	if err := wt.Checkout(&git.CheckoutOptions{Branch: plumbing.NewBranchReferenceName(to)}); err != nil {
+		// go-git can move HEAD before it fails; put it back so the user is not
+		// left on `to` with their own files in the tree.
+		restoreHead(r, head)
 		log.Fatalf("checkout %s: %v", to, err)
 	}
 	h, err := commitFile(r, wt, path, content, fmt.Sprintf("promote %s: %s -> %s", path, from, to))
@@ -249,6 +257,37 @@ func promote(args []string) {
 		log.Fatal(err)
 	}
 	fmt.Printf("promoted %s onto %s (%s)\n", path, to, h.String()[:12])
+}
+
+// trackedChanges lists files that are staged or modified. Untracked files are
+// left alone by the checkout round trip, so they don't block promote.
+func trackedChanges(wt *git.Worktree) []string {
+	st, err := wt.Status()
+	if err != nil {
+		log.Fatal(err)
+	}
+	var dirty []string
+	for f, fs := range st {
+		if fs.Staging == git.Untracked && fs.Worktree == git.Untracked {
+			continue
+		}
+		if fs.Staging != git.Unmodified || fs.Worktree != git.Unmodified {
+			dirty = append(dirty, f)
+		}
+	}
+	sort.Strings(dirty)
+	return dirty
+}
+
+// restoreHead points HEAD back at the branch (or detached commit) it was on.
+func restoreHead(r *git.Repository, head *plumbing.Reference) {
+	ref := plumbing.NewHashReference(plumbing.HEAD, head.Hash())
+	if head.Name().IsBranch() {
+		ref = plumbing.NewSymbolicReference(plumbing.HEAD, head.Name())
+	}
+	if err := r.Storer.SetReference(ref); err != nil {
+		log.Printf("could not restore HEAD to %s: %v", head.Name().Short(), err)
+	}
 }
 
 // commitFile writes content to path in the checked-out worktree and commits it.

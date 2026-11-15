@@ -22,7 +22,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -530,21 +529,15 @@ func reportSync(verb string, err error) {
 
 // --- prompt files ----------------------------------------------------------
 
-var slotRe = regexp.MustCompile(`\{(\w+)\}`)
-
-// deriveSlots reads declared slots straight from the template's {placeholders}.
+// deriveSlots reads declared slots straight from the template's {placeholders},
+// with the same rules the server validates against: {{ and }} are literal
+// braces, so "{{name}}" is text, not a slot. A malformed template yields no
+// slots; validate.Prompt then reports the actual brace error.
 // ponytail: derived, so the slot set always matches — add front-matter slot
 // declarations if you want to catch typos against an intended set.
 func deriveSlots(template string) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, m := range slotRe.FindAllStringSubmatch(template, -1) {
-		if !seen[m[1]] {
-			seen[m[1]] = true
-			out = append(out, m[1])
-		}
-	}
-	return out
+	slots, _ := validate.Slots(template)
+	return slots
 }
 
 // pathToURI maps a repo-relative prompt path to its priompt:// URI.

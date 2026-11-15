@@ -20,4 +20,9 @@ func TestDeriveSlots(t *testing.T) {
 	if s := deriveSlots("no slots here"); len(s) != 0 {
 		t.Errorf("deriveSlots on plain text = %v, want empty", s)
 	}
+	// {{ and }} are literal braces (str.format), so a JSON example is not a slot.
+	got = deriveSlots(`Answer {question}. Reply as JSON: {{"answer": "{{name}}"}}`)
+	if want := []string{"question"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("deriveSlots with escaped braces = %v, want %v", got, want)
+	}
 }

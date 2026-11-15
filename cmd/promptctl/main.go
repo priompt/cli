@@ -283,7 +283,7 @@ func trackedChanges(r *git.Repository, wt *git.Worktree) []string {
 				head = treeAt(r, "HEAD")
 			}
 			committed := blobContent(head, f)
-			if _, _, changed := changedLines(committed, diskContent(f)); !changed {
+			if sameIgnoringLineEndings(committed, diskContent(f)) {
 				if err := os.WriteFile(filepath.FromSlash(f), []byte(committed), 0o644); err != nil {
 					log.Fatal(err)
 				}
@@ -606,4 +606,10 @@ func firstLine(s string) string {
 
 func splitLines(s string) []string {
 	return strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
+}
+
+// sameIgnoringLineEndings reports whether two versions differ only in CRLF vs
+// LF — a core.autocrlf checkout on Windows is not a change.
+func sameIgnoringLineEndings(a, b string) bool {
+	return strings.ReplaceAll(a, "\r\n", "\n") == strings.ReplaceAll(b, "\r\n", "\n")
 }

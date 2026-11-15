@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -451,8 +452,7 @@ func uncommitted(st git.Status, tree *object.Tree, p string) bool {
 		return false
 	}
 	if fs.Staging == git.Unmodified && fs.Worktree == git.Modified {
-		_, _, changed := changedLines(blobContent(tree, p), diskContent(p))
-		return changed
+		return !sameIgnoringLineEndings(blobContent(tree, p), diskContent(p))
 	}
 	return fs.Staging != git.Unmodified || fs.Worktree != git.Unmodified
 }

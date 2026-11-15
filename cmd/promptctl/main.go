@@ -23,7 +23,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -137,8 +136,9 @@ func runDiff(r *git.Repository, ref string, w io.Writer) []fileVerdict {
 
 	var out []fileVerdict
 	for _, p := range promptUnion(tree) {
-		a, b, differs := changedLines(blobContent(tree, p), diskContent(p))
-		if !differs {
+		old := blobContent(tree, p)
+		neu := diskContent(p)
+		if old == neu {
 			continue
 		}
 		if _, err := tree.File(p); err != nil { // added since ref: nothing to diff against
@@ -146,7 +146,7 @@ func runDiff(r *git.Repository, ref string, w io.Writer) []fileVerdict {
 			out = append(out, fileVerdict{p, "new"})
 			continue
 		}
-		res, err := semdiff.Analyze(emb, a, b)
+		res, err := semdiff.Analyze(emb, splitLines(old), splitLines(neu))
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -548,12 +548,4 @@ func firstLine(s string) string {
 
 func splitLines(s string) []string {
 	return strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
-}
-
-// changedLines splits both versions into lines and reports whether they differ.
-// The comparison runs after splitLines normalises line endings, so a CRLF-only
-// difference (core.autocrlf on Windows) is not a change.
-func changedLines(old, neu string) (a, b []string, changed bool) {
-	a, b = splitLines(old), splitLines(neu)
-	return a, b, !slices.Equal(a, b)
 }

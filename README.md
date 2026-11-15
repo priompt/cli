@@ -1,7 +1,7 @@
 # promptctl
 
 **The writing desk for your prompts.** `promptctl` is the authoring CLI for
-[Priompt](https://github.com/) — it lets prompt writers work the way developers
+[Priompt](https://github.com/priompt/priompt) — it lets prompt writers work the way developers
 work on code: prompts are plain files in a git repo, every change is validated
 and committed, far-reaching edits are flagged by a semantic diff *before* they ship,
 and one command publishes to the Priompt server that your AI agents read from.
@@ -11,8 +11,9 @@ and one command publishes to the Priompt server that your AI agents read from.
 You write prompts as ordinary text files. `promptctl` adds three things a plain
 text editor can't give you:
 
-1. **A safety gate** — a malformed prompt (a `{placeholder}` you forgot to
-   declare, an empty template) cannot be committed. Ever.
+1. **A safety gate** — a malformed prompt (an unclosed `{name`, doubled
+   `{{name}}`, an empty template, or a `.prompt` file at the repo root with no
+   org) cannot be committed. Ever.
 2. **A meaning check** — before you ship an edit, a semantic diff tells you
    whether it's a harmless tweak or a **structural** change that rewires the
    prompt's meaning.
@@ -131,6 +132,7 @@ flowchart LR
 | `PRIOMPT_EMBED_MODEL` | embedding model name |
 | `PRIOMPT_EMBED_KEY` | API key for the embeddings endpoint |
 | `PRIOMPT_GIT_TOKEN` | token for HTTPS git remotes (go-git skips git's credential helper) |
+| `PRIOMPT_TOKEN` | bearer token sent by `publish` and `push -server`; needs `rw` access to the prompt's org when server auth is enabled |
 
 ## Relation to the other repos
 

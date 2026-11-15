@@ -229,7 +229,7 @@ func promote(args []string) {
 	}
 
 	wt := worktree(r)
-	if dirty := trackedChanges(wt); len(dirty) > 0 {
+	if dirty := trackedChanges(r, wt); len(dirty) > 0 {
 		log.Fatalf("promote needs a clean working tree; commit or stash first: %s", strings.Join(dirty, ", "))
 	}
 	head, err := r.Head()
@@ -260,16 +260,28 @@ func promote(args []string) {
 }
 
 // trackedChanges lists files that are staged or modified. Untracked files are
-// left alone by the checkout round trip, so they don't block promote.
-func trackedChanges(wt *git.Worktree) []string {
+// left alone by the checkout round trip, so they don't block promote. go-git
+// ignores core.autocrlf whenever it has to hash a file (a racy index entry, a
+// touched file), so a CRLF checkout of an LF blob shows as modified on
+// Windows; such a file only counts when it differs by more than line endings.
+func trackedChanges(r *git.Repository, wt *git.Worktree) []string {
 	st, err := wt.Status()
 	if err != nil {
 		log.Fatal(err)
 	}
+	var head *object.Tree
 	var dirty []string
 	for f, fs := range st {
 		if fs.Staging == git.Untracked && fs.Worktree == git.Untracked {
 			continue
+		}
+		if fs.Staging == git.Unmodified && fs.Worktree == git.Modified {
+			if head == nil {
+				head = treeAt(r, "HEAD")
+			}
+			if _, _, changed := changedLines(blobContent(head, f), diskContent(f)); !changed {
+				continue
+			}
 		}
 		if fs.Staging != git.Unmodified || fs.Worktree != git.Unmodified {
 			dirty = append(dirty, f)

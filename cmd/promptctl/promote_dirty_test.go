@@ -114,6 +114,19 @@ func TestPromoteRefusesUnstagedChangesAndStaysOnBranch(t *testing.T) {
 	}
 }
 
+// A CRLF checkout of an LF blob (core.autocrlf on Windows) is not a change,
+// even when go-git's status reports it as modified.
+func TestPromoteAllowsLineEndingOnlyDifferences(t *testing.T) {
+	r := promoteRepo(t)
+	os.WriteFile("acme/b.prompt", []byte("B v1 {y}\r\n"), 0o644)
+
+	promote([]string{"acme/a.prompt", "dev", "prod"})
+
+	if got := blobContent(treeAt(r, "prod"), "acme/a.prompt"); got != "A v2 {x}\n" {
+		t.Errorf("prod has %q, want promoted content", got)
+	}
+}
+
 func TestPromoteAllowsUntrackedFiles(t *testing.T) {
 	r := promoteRepo(t)
 	os.WriteFile("notes.txt", []byte("scratch"), 0o644)

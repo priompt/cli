@@ -260,10 +260,13 @@ func promote(args []string) {
 }
 
 // trackedChanges lists files that are staged or modified. Untracked files are
-// left alone by the checkout round trip, so they don't block promote. go-git
-// ignores core.autocrlf whenever it has to hash a file (a racy index entry, a
-// touched file), so a CRLF checkout of an LF blob shows as modified on
-// Windows; such a file only counts when it differs by more than line endings.
+// left alone by the checkout round trip, so they don't block promote.
+//
+// go-git ignores core.autocrlf whenever it has to hash a file (a racy index
+// entry, a touched file), so a CRLF checkout of an LF blob shows as modified on
+// Windows, and go-git's own Checkout then refuses to run. Such a file is not a
+// change: it is rewritten with its committed content (only its line endings
+// change, as they do for every file go-git checks out) and not reported.
 func trackedChanges(r *git.Repository, wt *git.Worktree) []string {
 	st, err := wt.Status()
 	if err != nil {
@@ -279,7 +282,11 @@ func trackedChanges(r *git.Repository, wt *git.Worktree) []string {
 			if head == nil {
 				head = treeAt(r, "HEAD")
 			}
-			if _, _, changed := changedLines(blobContent(head, f), diskContent(f)); !changed {
+			committed := blobContent(head, f)
+			if _, _, changed := changedLines(committed, diskContent(f)); !changed {
+				if err := os.WriteFile(filepath.FromSlash(f), []byte(committed), 0o644); err != nil {
+					log.Fatal(err)
+				}
 				continue
 			}
 		}

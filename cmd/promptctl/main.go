@@ -48,6 +48,7 @@ func main() {
 	if len(os.Args) < 2 {
 		usage()
 	}
+	chdirRepoRoot()
 	switch os.Args[1] {
 	case "commit":
 		commit(os.Args[2:])
@@ -190,7 +191,7 @@ func logCmd(args []string) {
 	if len(args) != 1 {
 		log.Fatal("usage: promptctl log <file.prompt>")
 	}
-	path := filepath.ToSlash(args[0])
+	path := repoPath(args[0])
 	r := openRepo()
 	iter, err := r.Log(&git.LogOptions{FileName: &path, Order: git.LogOrderCommitterTime})
 	if err != nil {
@@ -213,7 +214,7 @@ func promote(args []string) {
 	if len(args) != 3 {
 		log.Fatal("usage: promptctl promote <file.prompt> <from-branch> <to-branch>")
 	}
-	path, from, to := filepath.ToSlash(args[0]), args[1], args[2]
+	path, from, to := repoPath(args[0]), args[1], args[2]
 	r := openRepo()
 
 	content := blobContent(treeAt(r, from), path)
@@ -349,9 +350,17 @@ func publishCmd(args []string) {
 	if *server == "" {
 		log.Fatal("publish needs -server host:port")
 	}
-	paths := fs.Args()
+	var paths []string
+	for _, a := range fs.Args() {
+		paths = append(paths, repoPath(a))
+	}
 	if len(paths) == 0 {
-		paths = diskPromptFiles()
+		// No arguments: the prompts under the directory promptctl was run in.
+		for _, p := range diskPromptFiles() {
+			if cwdInRepo == "" || strings.HasPrefix(p, filepath.ToSlash(cwdInRepo)+"/") {
+				paths = append(paths, p)
+			}
+		}
 	}
 	publishToServer(*server, *useTLS, *caCert, paths)
 }
@@ -505,6 +514,50 @@ func promptUnion(tree *object.Tree) []string {
 }
 
 // --- go-git helpers --------------------------------------------------------
+
+// cwdInRepo is the directory promptctl was started in, relative to the repo
+// root ("" at the root or outside a repo). main chdirs to the root so prompt
+// discovery, URIs and file writes are repo-relative wherever it runs; a prompt's
+// URI comes from its repo path, so resolving it from a subdirectory would
+// publish it under the wrong org.
+var cwdInRepo string
+
+func chdirRepoRoot() {
+	r, err := git.PlainOpenWithOptions(".", &git.PlainOpenOptions{DetectDotGit: true})
+	if err != nil {
+		return // not a repo: publish still works on plain files
+	}
+	wt, err := r.Worktree()
+	if err != nil {
+		return
+	}
+	root := wt.Filesystem.Root()
+	cwd, err := os.Getwd()
+	if err != nil {
+		log.Fatal(err)
+	}
+	rel, err := filepath.Rel(root, cwd)
+	if err != nil || rel == "." {
+		return
+	}
+	if err := os.Chdir(root); err != nil {
+		log.Fatal(err)
+	}
+	cwdInRepo = rel
+}
+
+// repoPath turns a path argument, given relative to where promptctl was
+// started (or absolute), into a repo-relative slash path.
+func repoPath(arg string) string {
+	if filepath.IsAbs(arg) {
+		if root, err := os.Getwd(); err == nil {
+			if rel, err := filepath.Rel(root, arg); err == nil {
+				return filepath.ToSlash(rel)
+			}
+		}
+	}
+	return filepath.ToSlash(filepath.Join(cwdInRepo, arg))
+}
 
 func openRepo() *git.Repository {
 	r, err := git.PlainOpenWithOptions(".", &git.PlainOpenOptions{DetectDotGit: true})

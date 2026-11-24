@@ -109,10 +109,13 @@ flowchart LR
   catch big rewrites, but point it at a real embedding endpoint for real
   semantics.
 - **diff exits 0 whatever the verdicts** unless you gate it: `-fail-on` takes a
-  comma-separated list of verdicts (`new`, `structural`, `tweak`, `minor`) and
+  comma-separated list of verdicts (`new`, `structural`, `deleted`, `tweak`, `minor`) and
   exits 1 after the full diff if any prompt has one of them —
   `promptctl diff -fail-on structural origin/main` in CI. A prompt that doesn't
-  exist in the ref reads as `new` (not `structural`).
+  exist in the ref reads as `new` (not `structural`). A prompt deleted from the
+  working tree reads as `deleted`: deleting the file does not remove it from
+  the server, because publish only sends files that still exist. Gate on
+  `deleted` if a removal must be handled explicitly.
 - **push / pull** use go-git and do not read git's credential helper — set
   `PRIOMPT_GIT_TOKEN` for HTTPS remotes; SSH uses your ssh-agent.
 - `promptctl push -server …` git-pushes **and** publishes each prompt, so

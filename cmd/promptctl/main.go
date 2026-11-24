@@ -100,7 +100,7 @@ func commit(args []string) {
 // of them makes it exit 1 (after printing the full diff).
 func diffCmd(args []string) {
 	fs := flag.NewFlagSet("diff", flag.ExitOnError)
-	failOn := fs.String("fail-on", "", "exit 1 if any prompt's verdict is one of these (comma-separated: new, structural, tweak, minor)")
+	failOn := fs.String("fail-on", "", "exit 1 if any prompt's verdict is one of these (comma-separated: new, structural, deleted, tweak, minor)")
 	fs.Parse(args)
 	ref := "HEAD"
 	if fs.NArg() > 0 {
@@ -130,7 +130,8 @@ func diffCmd(args []string) {
 type fileVerdict struct{ path, verdict string }
 
 // runDiff prints the diff of every changed prompt to w and returns each one's
-// verdict: semdiff's worst hunk class, or "new" for a prompt absent from ref.
+// verdict: semdiff's worst hunk class, "new" for a prompt absent from ref, or
+// "deleted" for a prompt removed from disk.
 func runDiff(r *git.Repository, ref string, w io.Writer) []fileVerdict {
 	tree := treeAt(r, ref)
 	emb := semdiff.EmbedderFromEnv()
@@ -139,12 +140,19 @@ func runDiff(r *git.Repository, ref string, w io.Writer) []fileVerdict {
 	for _, p := range promptUnion(tree) {
 		old := blobContent(tree, p)
 		neu := diskContent(p)
-		if old == neu {
-			continue
-		}
-		if _, err := tree.File(p); err != nil { // added since ref: nothing to diff against
+		_, refErr := tree.File(p)
+		_, statErr := os.Stat(filepath.FromSlash(p))
+		if refErr != nil && statErr == nil { // added since ref: nothing to diff against
 			fmt.Fprintf(w, "## %s\nnew prompt (not in %s)\n  => new\n\n", p, ref)
 			out = append(out, fileVerdict{p, "new"})
+			continue
+		}
+		if refErr == nil && statErr != nil { // deleted on disk: still served until removed on server
+			fmt.Fprintf(w, "## %s\ndeleted prompt (still served until removed on the server)\n  => deleted\n\n", p)
+			out = append(out, fileVerdict{p, "deleted"})
+			continue
+		}
+		if old == neu {
 			continue
 		}
 		res, err := semdiff.Analyze(emb, splitLines(old), splitLines(neu))
@@ -162,7 +170,7 @@ func runDiff(r *git.Repository, ref string, w io.Writer) []fileVerdict {
 
 // verdictNames maps each -fail-on name to the verdict it gates.
 var verdictNames = map[string]string{
-	"new": "new", "structural": "structural",
+	"new": "new", "structural": "structural", "deleted": "deleted",
 	"tweak": "localized tweak", "localized tweak": "localized tweak",
 	"minor": "minor edit", "minor edit": "minor edit",
 }
@@ -178,7 +186,7 @@ func parseFailOn(s string) (map[string]bool, error) {
 		}
 		v, ok := verdictNames[name]
 		if !ok {
-			return nil, fmt.Errorf("-fail-on: unknown verdict %q (want new, structural, tweak, minor)", name)
+			return nil, fmt.Errorf("-fail-on: unknown verdict %q (want new, structural, deleted, tweak, minor)", name)
 		}
 		set[v] = true
 	}
